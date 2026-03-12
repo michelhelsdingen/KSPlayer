@@ -628,7 +628,6 @@ extension MEPlayerItem: MediaPlayback {
     public func shutdown() {
         guard state != .closed else { return }
         state = .closed
-        av_packet_free(&outputPacket)
         stopRecord()
         // 故意循环引用。等结束了。才释放
         let closeOperation = BlockOperation {
@@ -645,7 +644,6 @@ extension MEPlayerItem: MediaPlayback {
             self.formatCtx?.pointee.interrupt_callback.opaque = nil
             self.formatCtx?.pointee.interrupt_callback.callback = nil
             avformat_close_input(&self.formatCtx)
-            avformat_close_input(&self.outputFormatCtx)
             self.duration = 0
             self.closeOperation = nil
             self.operationQueue.cancelAllOperations()
@@ -670,8 +668,20 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     func stopRecord() {
-        if let outputFormatCtx {
-            av_write_trailer(outputFormatCtx)
+        // Nil out shared pointers first so the read thread's
+        // `if let outputFormatCtx` guard fails immediately and stops
+        // calling av_interleaved_write_frame. Then safely write trailer.
+        let ctx = outputFormatCtx
+        outputFormatCtx = nil
+        if let ctx {
+            av_write_trailer(ctx)
+            avio_closep(&ctx.pointee.pb)
+            avformat_free_context(ctx)
+        }
+        var pkt = outputPacket
+        outputPacket = nil
+        if pkt != nil {
+            av_packet_free(&pkt)
         }
     }
 
